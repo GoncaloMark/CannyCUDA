@@ -80,7 +80,7 @@ __global__ void first_edges_kernel(const pixel_t *nms, pixel_t *out, const int n
     }
 }
 
-__global__ void hysteresis_edges_kernel(const pixel_t *nms, pixel_t *out, const int nx, const int ny, const int tmin){
+__global__ void hysteresis_edges_kernel(const pixel_t *nms, pixel_t *out, const int nx, const int ny, const int tmin, int *changed){
     int i = blockIdx.x * blockDim.x + threadIdx.x + 1;
     int j = blockIdx.y * blockDim.y + threadIdx.y + 1;
 
@@ -101,6 +101,7 @@ __global__ void hysteresis_edges_kernel(const pixel_t *nms, pixel_t *out, const 
             for(int k = 0; k < 8; k++)
                 if (out[nbs[k]] != 0) {
                     out[t] = MAX_BRIGHTNESS;
+		    atomicOr(changed, 1);
                     break;
                 }
         }
@@ -288,11 +289,23 @@ void cannyDevice( const int *h_idata, const int w, const int h, const int tmin, 
     first_edges_kernel<<<gridSize, blockSize>>>(nms, d_odata, nx, ny, tmax);
 
     //TODO: Optimize with shared memory inside the kernel do the while loop and have the changed bool be shared memory
-    int iterations = 10; 
+    //do while version 
 
-    for (int i = 0; i < iterations; ++i) {
-        hysteresis_edges_kernel<<<gridSize, blockSize>>>(nms, d_odata, nx, ny, tmin);
-    }
+    int h_changed;
+    int *d_changed;
+    int iterations = 0;
+    cudaMalloc(&d_changed, sizeof(int));
+    do {
+	h_changed = 0;
+	cudaMemcpy(d_changed, &h_changed, sizeof(int), cudaMemcpyHostToDevice);
+        hysteresis_edges_kernel<<<gridSize, blockSize>>>(nms, d_odata, nx, ny, tmin, d_changed);
+	cudaMemcpy(&h_changed, d_changed, sizeof(int), cudaMemcpyDeviceToHost);
+        iterations++;
+    } while (h_changed != 0);
+
+    cudaFree(d_changed);
+
+    printf("hysteresis kernel calls: %d\n", iterations);
 
     // d_odata -> h_odata
     cudaMemcpy(h_odata, d_odata, nx * ny * sizeof(pixel_t), cudaMemcpyDeviceToHost);
