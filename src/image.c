@@ -142,6 +142,103 @@ int loadPGM(const char *filename, uint32_t** data, unsigned int* width, unsigned
     return 1; // Indicate success
 }
 
+int loadPGM_prealloc(const char *filename, uint32_t* data, unsigned int* width, unsigned int* height) {
+    FILE *fp;
+    char magicNumber[3];
+    int w = 0, h = 0, mv;
+    char line[256];
+
+    // Open the file in binary read mode
+    fp = fopen(filename, "rb");
+    if (fp == NULL) {
+        fprintf(stderr, "Error: Could not open file %s\n", filename);
+        return 0;
+    }
+
+    // Read magic number
+    if (fgets(magicNumber, sizeof(magicNumber), fp) == NULL) {
+        fprintf(stderr, "Error: Could not read magic number.\n");
+        fclose(fp);
+        return 0;
+    }
+    magicNumber[strcspn(magicNumber, "\n")] = 0;
+    if (strcmp(magicNumber, "P2") != 0 && strcmp(magicNumber, "P5") != 0) {
+        fprintf(stderr, "Error: Invalid PGM format (Magic Number: %s)\n", magicNumber);
+        fclose(fp);
+        return 0;
+    }
+
+    // Read width and height, skipping comments
+    while (w == 0 || h == 0) {
+        if (fgets(line, sizeof(line), fp) == NULL) {
+            fprintf(stderr, "Error: Reached EOF while reading width/height\n");
+            fclose(fp);
+            return 0;
+        }
+        if (line[0] == '#') continue;
+        if (sscanf(line, "%d %d", &w, &h) == 2) break;
+    }
+
+    if (w <= 0 || h <= 0) {
+        fprintf(stderr, "Error: Invalid dimensions: %dx%d\n", w, h);
+        fclose(fp);
+        return 0;
+    }
+
+    // Read maxval
+    do {
+        if (fgets(line, sizeof(line), fp) == NULL) {
+            fprintf(stderr, "Error: Could not read maxval.\n");
+            fclose(fp);
+            return 0;
+        }
+    } while (line[0] == '#');
+    if (sscanf(line, "%d", &mv) != 1 || mv != 255) {
+        fprintf(stderr, "Error: Invalid or unsupported maxval (expected 255): %d\n", mv);
+        fclose(fp);
+        return 0;
+    }
+
+    // Read pixel data
+    if (strcmp(magicNumber, "P2") == 0) {
+        for (int i = 0; i < w * h; i++) {
+            unsigned int pixel;
+            if (fscanf(fp, "%u", &pixel) != 1) {
+                fprintf(stderr, "Error: Invalid ASCII pixel data.\n");
+                fclose(fp);
+                return 0;
+            }
+            data[i] = (uint32_t)pixel;
+        }
+    } else { // P5
+        uint8_t* buffer = (uint8_t*)malloc(w * h);
+        if (!buffer) {
+            fprintf(stderr, "Error: Could not allocate temporary buffer.\n");
+            fclose(fp);
+            return 0;
+        }
+
+        if (fread(buffer, 1, w * h, fp) != (size_t)(w * h)) {
+            fprintf(stderr, "Error: Could not read all binary pixel data.\n");
+            free(buffer);
+            fclose(fp);
+            return 0;
+        }
+
+        for (int i = 0; i < w * h; i++) {
+            data[i] = (uint32_t)buffer[i];
+        }
+
+        free(buffer);
+    }
+
+    fclose(fp);
+    *width = w;
+    *height = h;
+    return 1;
+}
+
+
 // Function to save a PGM image with unsigned int data
 int savePGM(const char *filename, const uint32_t* data, unsigned int width, unsigned int height) {
     FILE *fp;

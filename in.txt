@@ -1,0 +1,8 @@
+images/house.pgm
+images/jetplane.pgm
+images/lake.pgm
+images/livingroom.pgm
+images/mandril.pgm
+images/peppers_gray.pgm
+images/pirate.pgm
+images/walkbridge.pgm

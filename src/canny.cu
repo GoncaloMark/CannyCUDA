@@ -9,6 +9,9 @@
 #include <unistd.h>
 #include <assert.h>
 #include <float.h>
+#include <vector>
+#include <string>
+#include <fstream>
 
 // utilities for safe cuda api calls copied from cuda sdk.
 
@@ -33,9 +36,6 @@ inline void __cudaGetLastError( const char *errorMessage, const char *file, cons
         exit(-1);
     }
 }
-
-#define max(a,b) (((a)>(b))?(a):(b))
-#define min(a,b) (((a)<(b))?(a):(b))
 
 #define MAX_BRIGHTNESS 255
 
@@ -297,6 +297,8 @@ void cannyHost( const int *h_idata, const int w, const int h,
 //==============================
 // Your code goes into this file
 #include "canny-device.cu"
+#include "canny-tensor.cu"
+#include "threading.hpp"
 //==============================
 
 // print command line format
@@ -313,10 +315,11 @@ int main( int argc, char** argv)
     char *fileIn=(char *)"images/lake.pgm",*fileOut=(char *)"out.pgm",*referenceOut=(char *)"reference.pgm";
     int tmin = 45, tmax = 50;
     float sigma=1.0f;
+    char *dir=NULL;
 
     // parse command line arguments
     int opt;
-    while( (opt = getopt(argc,argv,"d:i:o:r:n:x:s:h")) !=-1)
+    while( (opt = getopt(argc,argv,"d:i:o:r:n:x:s:t:h")) !=-1)
     {
         switch(opt)
         {
@@ -375,6 +378,15 @@ int main( int argc, char** argv)
                     exit(1);
                 }
                 break;
+            case 't': // tensor mode
+                if(strlen(optarg)==0)
+                {
+                    usage(argv[0]);
+                    exit(1);
+                }
+
+                dir = strdup(optarg);
+                break;
             case 'h': // help
                 usage(argv[0]);
                 exit(0);
@@ -414,30 +426,88 @@ int main( int argc, char** argv)
     cudaEventCreate(&startD);
     cudaEventCreate(&stopD);
 
+    int* h_stack_idata=NULL;
+
     // allocate host memory
     int* h_idata=NULL;
     unsigned int h,w;
 
-    //load pgm
-    if (loadPGM(fileIn, (uint32_t**)&h_idata, &w, &h) != 1) {
-        exit(1);
+    if(dir != NULL){
+        std::vector<std::string> files;
+        std::ifstream infile(dir);
+        h_stack_idata=(int*) malloc(512*512*8*sizeof(uint32_t));
+        if(!infile.is_open()) {
+            return 1;
+        } else {
+            std::string line;
+            while (getline(infile, line)){
+                files.push_back(line);
+            }
+        }
+
+        // load into hstack
+        for (size_t i = 0; i < files.size(); ++i) {
+            std::string& f = files[i];
+            printf("%s\n", f.c_str());
+
+            // Compute offset for this image
+            uint32_t* image_ptr = ((uint32_t*)h_stack_idata) + i * (512*512);
+
+            if (loadPGM_prealloc(f.c_str(), image_ptr, &w, &h) != 1) {
+                exit(1);
+            }
+        }
+    } else {
+        //load pgm
+        if (loadPGM(fileIn, (uint32_t**)&h_idata, &w, &h) != 1) {
+            exit(1);
+        }
     }
 
     // allocate mem for the result on host side
-    int* h_odata = (int*) calloc( h*w, sizeof(unsigned int));
-    int* reference = (int*) calloc( h*w, sizeof(unsigned int));
-
-    // detect edges at host
-    cudaEventRecord( startH, 0 );
-    cannyHost(h_idata, w, h, tmin, tmax, sigma, reference);
-    cudaEventRecord( stopH, 0 );
-    cudaEventSynchronize( stopH );
+    int* h_odata;
+    int* reference;
 
     // detect edges at GPU
-    cudaEventRecord( startD, 0 );
-    cannyDevice(h_idata, w, h, tmin, tmax, sigma, h_odata);
-    cudaEventRecord( stopD, 0 );
-    cudaEventSynchronize( stopD );
+    if(dir != NULL){
+        h_odata = (int*) calloc( h*w*8, sizeof(uint32_t));
+        reference = (int*) calloc( h*w*8, sizeof(unsigned int));
+
+        ThreadPool t_pool(8);
+
+        // detect edges at host
+        cudaEventRecord( startH, 0 );
+        for (int i = 0; i < 8; ++i) {
+            const int* input_ptr = h_stack_idata + i * w * h;
+            int* output_ptr = reference + i * w * h;
+
+            t_pool.addTask([=]() {
+                cannyHost(input_ptr, w, h, tmin, tmax, sigma, output_ptr);
+            });
+        }
+
+        t_pool.waitFinished();
+        cudaEventRecord( stopH, 0 );
+        cudaEventSynchronize( stopH );
+
+        cudaEventRecord( startD, 0 );
+        cannyDeviceTensor(h_stack_idata, w, h, tmin, tmax, sigma, h_odata);
+        cudaEventRecord( stopD, 0 );
+        cudaEventSynchronize( stopD );
+    } else {
+        h_odata = (int*) calloc( h*w, sizeof(unsigned int));
+        reference = (int*) calloc( h*w, sizeof(unsigned int));
+        // detect edges at host
+        cudaEventRecord( startH, 0 );
+        cannyHost(h_idata, w, h, tmin, tmax, sigma, reference);
+        cudaEventRecord( stopH, 0 );
+        cudaEventSynchronize( stopH );
+
+        cudaEventRecord( startD, 0 );
+        cannyDevice(h_idata, w, h, tmin, tmax, sigma, h_odata);
+        cudaEventRecord( stopD, 0 );
+        cudaEventSynchronize( stopD );
+    }
 
     // check if kernel execution generated and error
     cudaCheckMsg("Kernel execution failed");
@@ -449,21 +519,60 @@ int main( int argc, char** argv)
     printf( "Device processing time: %f (ms)\n", timeD);
 
     // save output images
-    if (savePGM(referenceOut, (unsigned int *)reference, w, h) != 1) {
-        exit(1);
-    }
+    if(dir != NULL){
+        for (int i = 0; i < 8; i++) {
+            uint32_t* image_ptr = ((uint32_t*)reference) + i * (w * h);
+            char filename[10];
+            snprintf(filename, sizeof(filename), "ref_%d.pgm", i + 1);
 
-    if (savePGM(fileOut,(unsigned int *) h_odata, w, h) != 1) {
-        exit(1);
-    }
+            if (savePGM(filename, image_ptr, w, h) != 1) {
+                fprintf(stderr, "Failed to save image %s\n", filename);
+                exit(1);
+            }
+        }
 
-    int hist = 0;
-    for (int i = 0; i < w * h; ++i){
-        int delta = abs(reference[i] - h_odata[i]);
-        if (delta != 0)
-            hist++;
+        for (int i = 0; i < 8; i++) {
+            uint32_t* image_ptr = ((uint32_t*)h_odata) + i * (w * h);
+            char filename[6];
+            snprintf(filename, sizeof(filename), "%d.pgm", i + 1);
+
+            if (savePGM(filename, image_ptr, w, h) != 1) {
+                fprintf(stderr, "Failed to save image %s\n", filename);
+                exit(1);
+            }
+        }
+
+        for (int img = 0; img < 8; ++img) {
+            int hist = 0;
+            uint32_t* ref_ptr = ((uint32_t*)reference) + img * (w * h);
+            uint32_t* dev_ptr = ((uint32_t*)h_odata) + img * (w * h);
+
+            for (int i = 0; i < w * h; ++i) {
+                int delta = abs((int)ref_ptr[i] - (int)dev_ptr[i]);
+                if (delta != 0)
+                    hist++;
+            }
+
+            printf("Image %d - Different pixels: %d/%d (%.2f%%)\n",
+                img + 1, hist, w * h, hist / (float)(w * h) * 100.0f);
+        }
+    } else {
+        if (savePGM(referenceOut, (unsigned int *)reference, w, h) != 1) {
+            exit(1);
+        }
+
+        if (savePGM(fileOut,(unsigned int *) h_odata, w, h) != 1) {
+            exit(1);
+        }
+
+        int hist = 0;
+        for (int i = 0; i < w * h; ++i){
+            int delta = abs(reference[i] - h_odata[i]);
+            if (delta != 0)
+                hist++;
+        }
+        printf("\nNumber of different pixels: %d/%d (%.2f%%)\n", hist, w*h, hist/(float)(w*h) * 100.0f);
     }
-    printf("\nNumber of different pixels: %d/%d (%.2f%%)\n", hist, w*h, hist/(float)(w*h) * 100.0f);
 
     // cleanup memory
     if (h_idata != nullptr)
