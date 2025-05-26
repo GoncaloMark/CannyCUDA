@@ -10,8 +10,6 @@ __global__ void convolution_kernel(const pixel_t *in, pixel_t *out, const float 
     int x = blockIdx.x * blockDim.x + threadIdx.x;
     int y = blockIdx.y * blockDim.y + threadIdx.y;
 
-    if (x >= nx || y >= ny) return;
-
     if(x >= khalf && x < nx - khalf && y >= khalf && y < ny - khalf){
         float pixel = 0.0;
 
@@ -117,9 +115,6 @@ __global__ void min_max_kernel(const pixel_t *in, const int nx, const int ny, pi
 
     if (x >= nx || y >= ny) return;
 
-    shared_min[tid] = INT_MAX;
-    shared_max[tid] = -INT_MAX;
-
     // thread per pixel
     int pixel = in[idx];
     shared_min[tid] = pixel;
@@ -127,7 +122,7 @@ __global__ void min_max_kernel(const pixel_t *in, const int nx, const int ny, pi
     __syncthreads();
 
     // reduce shared memory with binary tree 
-    for (int stride = (blockDim.x * blockDim.y) / 2; stride > 0; stride >>= 1) {
+    for (int stride = (blockDim.x * blockDim.y) >> 1; stride > 0; stride >>= 1) {
         if (tid < stride) {
             shared_min[tid] = min(shared_min[tid], shared_min[tid + stride]);
             shared_max[tid] = max(shared_max[tid], shared_max[tid + stride]);
@@ -144,8 +139,6 @@ __global__ void min_max_kernel(const pixel_t *in, const int nx, const int ny, pi
 __global__ void normalize_kernel(pixel_t *inout, const int nx, const int ny, const int kn, const int min_val, const int max_val){
     int x = blockIdx.x * blockDim.x + threadIdx.x;
     int y = blockIdx.y * blockDim.y + threadIdx.y;
-
-    if (x >= nx || y >= ny) return;
     
     const int khalf = kn >> 1;
     
@@ -191,8 +184,8 @@ void gaussian_filter_device(const pixel_t *in, pixel_t *out, const int nx, const
     convolution_device(in, out, d_kernel, nx, ny, n);
 
     // Image processing sizes (1 thread per pixel)
-    dim3 blockSize(16, 32); 
-    dim3 gridSize(ceil(nx / 16.0), ceil(ny / 32.0));
+    dim3 blockSize(16, 16); 
+    dim3 gridSize(ceil(nx / 16.0), ceil(ny / 16.0));
     
     // Get min and max 
     int sharedMemSize = 2 * blockSize.x * blockSize.y * sizeof(int);
@@ -268,14 +261,14 @@ void cannyDevice( const int *h_idata, const int w, const int h, const int tmin, 
     // Gradient along y
     convolution_device(d_odata, after_Gy, d_Gy, nx, ny, 3);
 
-    dim3 blockDim(16, 32); 
-    dim3 gridDim(ceil((nx-2) / 16.0), ceil((ny-2) / 32.0)); // exclude the 2 border pixels on gradient merge (x0 and nx-1) (y0 and ny-1)
+    dim3 blockDim(16, 16); 
+    dim3 gridDim(ceil((nx-2) / 16.0), ceil((ny-2) / 16.0)); // exclude the 2 border pixels on gradient merge (x0 and nx-1) (y0 and ny-1)
 
     gradient_merge_kernel<<<gridDim, blockDim>>>(after_Gx, after_Gy, G, nx, ny);
 
     // 1 thread per pixel
-    dim3 blockSize(16, 32); 
-    dim3 gridSize(ceil(nx / 16.0), ceil(ny / 32.0));
+    dim3 blockSize(16, 16); 
+    dim3 gridSize(ceil(nx / 16.0), ceil(ny / 16.0));
 
     non_maximum_supression_kernel<<<gridSize, blockSize>>>(after_Gx, after_Gy, G, nms, nx, ny);
 

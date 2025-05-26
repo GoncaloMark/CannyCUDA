@@ -12,20 +12,20 @@ __global__ void convolution_kernel_tensor(const pixel_t *in, pixel_t *out, const
     int y = blockIdx.y * blockDim.y + threadIdx.y + khalf;
     int z = blockIdx.z;
 
-    if (x >= nx - khalf || y >= ny - khalf || z >= 8) return;
+    if(x >= khalf && x < nx - khalf && y >= khalf && y < ny - khalf){
+        float pixel = 0.0f;
 
-    float pixel = 0.0f;
-
-    for (int j = -khalf; j <= khalf; j++){
-        for (int i = -khalf; i <= khalf; i++) {
-            int xi = x - i;
-            int yj = y - j;
-            int idx = z * (nx * ny) + yj * nx + xi;
-            pixel += in[idx] * kernel[(j + khalf) * kn + (i + khalf)];
+        for (int j = -khalf; j <= khalf; j++){
+            for (int i = -khalf; i <= khalf; i++) {
+                int xi = x - i;
+                int yj = y - j;
+                int idx = z * (nx * ny) + yj * nx + xi;
+                pixel += in[idx] * kernel[(j + khalf) * kn + (i + khalf)];
+            }
         }
-    }
 
-    out[z * (nx * ny) + y * nx + x] = static_cast<pixel_t>(pixel);
+        out[z * (nx * ny) + y * nx + x] = static_cast<pixel_t>(pixel);
+    }
 }
 
 
@@ -47,7 +47,7 @@ __global__ void non_maximum_supression_kernel_tensor(const pixel_t *after_Gx, co
     int j = blockIdx.y * blockDim.y + threadIdx.y + 1;
     int z = blockIdx.z;
 
-    if (i > 0 && i < nx - 1 && j > 0 && j < ny - 1 && z < 8) {
+    if (i > 0 && i < nx - 1 && j > 0 && j < ny - 1) {
         int slice_offset = z * nx * ny;
         int c = slice_offset + i + nx * j;
 
@@ -78,7 +78,7 @@ __global__ void first_edges_kernel_tensor(const pixel_t *nms, pixel_t *out, cons
     int j = blockIdx.y * blockDim.y + threadIdx.y;
     int z = blockIdx.z;
 
-    if(i < nx && j < ny && z < 8){
+    if(i < nx && j < ny){
         size_t c = z * nx * ny + j * nx + i;
         if(nms[c] >= tmax){
             out[c] = MAX_BRIGHTNESS;
@@ -93,7 +93,7 @@ __global__ void hysteresis_edges_kernel_tensor(const pixel_t *nms, pixel_t *out,
     int j = blockIdx.y * blockDim.y + threadIdx.y + 1;
     int z = blockIdx.z;
 
-    if(i >= 1 && i < nx - 1 && j >= 1 && j < ny - 1 && z < 8){
+    if(i >= 1 && i < nx - 1 && j >= 1 && j < ny - 1){
         int slice_offset = z * nx * ny;
         int t = slice_offset + j * nx + i;
 
@@ -128,12 +128,9 @@ __global__ void min_max_kernel_tensor(const pixel_t *in, const int nx, const int
     int y = blockIdx.y * blockDim.y + threadIdx.y;
     int z = blockIdx.z;
 
-    if (x >= nx || y >= ny || z >= 8) return;
+    if (x >= nx || y >= ny) return;
 
     int idx = z * (nx * ny) + y * nx + x;
-
-    shared_min[tid] = INT_MAX;
-    shared_max[tid] = -INT_MAX;
 
     // thread per pixel
     int pixel = in[idx];
@@ -143,7 +140,7 @@ __global__ void min_max_kernel_tensor(const pixel_t *in, const int nx, const int
     __syncthreads();
 
     // reduce shared memory with binary tree 
-    for (int stride = (blockDim.x * blockDim.y * blockDim.z) / 2; stride > 0; stride >>= 1) {
+    for (int stride = (blockDim.x * blockDim.y * blockDim.z) >> 1; stride > 0; stride >>= 1) {
         if (tid < stride) {
             shared_min[tid] = min(shared_min[tid], shared_min[tid + stride]);
             shared_max[tid] = max(shared_max[tid], shared_max[tid + stride]);
@@ -161,8 +158,6 @@ __global__ void normalize_kernel_tensor(pixel_t *inout, const int nx, const int 
     int x = blockIdx.x * blockDim.x + threadIdx.x;
     int y = blockIdx.y * blockDim.y + threadIdx.y;
     int z = blockIdx.z;
-
-    if (x >= nx || y >= ny || z >= 8) return;
     
     const int khalf = kn >> 1;
     
@@ -288,14 +283,14 @@ void cannyDeviceTensor( const int *h_idata, const int w, const int h, const int 
     // Gradient along y
     convolution_device_tensor(d_odata, after_Gy, d_Gy, nx, ny, 3);
 
-    dim3 blockDim(16, 32); 
-    dim3 gridDim(ceil((nx-2) / 16.0), ceil((ny-2) / 32.0), 8); // exclude the 2 border pixels on gradient merge (x0 and nx-1) (y0 and ny-1)
+    dim3 blockDim(16, 16); 
+    dim3 gridDim(ceil((nx-2) / 16.0), ceil((ny-2) / 16.0), 8); // exclude the 2 border pixels on gradient merge (x0 and nx-1) (y0 and ny-1)
 
     gradient_merge_kernel_tensor<<<gridDim, blockDim>>>(after_Gx, after_Gy, G, nx, ny);
 
     // 1 thread per pixel
-    dim3 blockSize(16, 32); 
-    dim3 gridSize(ceil(nx / 16.0), ceil(ny / 32.0), 8);
+    dim3 blockSize(16, 16); 
+    dim3 gridSize(ceil(nx / 16.0), ceil(ny / 16.0), 8);
 
     non_maximum_supression_kernel_tensor<<<gridSize, blockSize>>>(after_Gx, after_Gy, G, nms, nx, ny);
     
