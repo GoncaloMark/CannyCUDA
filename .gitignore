@@ -1,4 +1,4 @@
 .vscode
 canny
-out.pgm
-reference.pgm
+*.pgm
+results.txt
