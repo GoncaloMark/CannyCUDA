@@ -4,10 +4,10 @@ import statistics
 
 def run_command(cmd):
     try:
-        result = subprocess.run(cmd, shell=True, check=True, text=True, capture_output=True)
+        result = subprocess.run(cmd, shell=True, check=True, universal_newlines=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         return result.stdout
     except subprocess.CalledProcessError as e:
-        print(f"Error running command: {cmd}")
+        print("Error running command: {}".format(cmd))
         print(e.output)
         return ""
 
