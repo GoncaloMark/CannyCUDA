@@ -298,6 +298,7 @@ void cannyHost( const int *h_idata, const int w, const int h,
 // Your code goes into this file
 #include "canny-device.cu"
 #include "canny-tensor.cu"
+#include "canny-device-sm.cu"
 #include "threading.hpp"
 //==============================
 
@@ -316,10 +317,11 @@ int main( int argc, char** argv)
     int tmin = 45, tmax = 50;
     float sigma=1.0f;
     char *dir=NULL;
+    bool sharedMem = false;
 
     // parse command line arguments
     int opt;
-    while( (opt = getopt(argc,argv,"d:i:o:r:n:x:s:t:h")) !=-1)
+    while( (opt = getopt(argc,argv,"d:i:o:r:n:x:s:t:mh")) !=-1)
     {
         switch(opt)
         {
@@ -386,6 +388,9 @@ int main( int argc, char** argv)
                 }
 
                 dir = strdup(optarg);
+                break;
+            case 'm': // shared memory
+                sharedMem = true;
                 break;
             case 'h': // help
                 usage(argv[0]);
@@ -494,9 +499,26 @@ int main( int argc, char** argv)
         cannyDeviceTensor(h_stack_idata, w, h, tmin, tmax, sigma, h_odata);
         cudaEventRecord( stopD, 0 );
         cudaEventSynchronize( stopD );
+
+    } else if (sharedMem) {
+        h_odata = (int*) calloc( h*w, sizeof(unsigned int));
+        reference = (int*) calloc( h*w, sizeof(unsigned int));
+
+        // detect edges at host with shared memory
+        cudaEventRecord( startH, 0 );
+        cannyHost(h_idata, w, h, tmin, tmax, sigma, reference);
+        cudaEventRecord( stopH, 0 );
+        cudaEventSynchronize( stopH );
+
+        cudaEventRecord( startD, 0 );
+        cannyDeviceSM(h_idata, w, h, tmin, tmax, sigma, h_odata);
+        cudaEventRecord( stopD, 0 );
+        cudaEventSynchronize( stopD );
+
     } else {
         h_odata = (int*) calloc( h*w, sizeof(unsigned int));
         reference = (int*) calloc( h*w, sizeof(unsigned int));
+
         // detect edges at host
         cudaEventRecord( startH, 0 );
         cannyHost(h_idata, w, h, tmin, tmax, sigma, reference);

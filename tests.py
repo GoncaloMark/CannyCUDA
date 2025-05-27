@@ -42,10 +42,13 @@ def summarize(times):
     }
 
 canny_host, canny_device = run_multiple("./canny", 5)
+canny_m_host, canny_m_device = run_multiple("./canny -m", 5)
 canny_t_host, canny_t_device = run_multiple("./canny -t in.txt", 5)
 
 canny_host_stats = summarize(canny_host)
 canny_device_stats = summarize(canny_device)
+canny_m_host_stats = summarize(canny_m_host)
+canny_m_device_stats = summarize(canny_m_device)
 canny_t_host_stats = summarize(canny_t_host)
 canny_t_device_stats = summarize(canny_t_device)
 
@@ -60,6 +63,18 @@ with open("results.txt", "w") as f:
     f.write(f"Device StdDev: {canny_device_stats['stddev']:.3f} ms\n")
     f.write(f"Device Median: {canny_device_stats['median']:.3f} ms\n")
     speedup = canny_host_stats['average'] / canny_device_stats['average']
+    f.write(f"Speedup (Host/Device): {speedup:.2f}x\n\n")
+    
+    f.write("== ./canny -m (5 runs) ==\n")
+    f.write(f"Host times: {canny_m_host}\n")
+    f.write(f"Host Avg: {canny_m_host_stats['average']:.3f} ms\n")
+    f.write(f"Host StdDev: {canny_m_host_stats['stddev']:.3f} ms\n")
+    f.write(f"Host Median: {canny_m_host_stats['median']:.3f} ms\n")
+    f.write(f"[SM] Device times: {canny_m_device}\n")
+    f.write(f"[SM] Device Avg: {canny_m_device_stats['average']:.3f} ms\n")
+    f.write(f"[SM] Device StdDev: {canny_m_device_stats['stddev']:.3f} ms\n")
+    f.write(f"[SM] Device Median: {canny_m_device_stats['median']:.3f} ms\n")
+    speedup = canny_m_host_stats['average'] / canny_m_device_stats['average']
     f.write(f"Speedup (Host/Device): {speedup:.2f}x\n\n")
 
     f.write("== ./canny -t in.txt (5 runs) ==\n")
