@@ -299,6 +299,7 @@ void cannyHost( const int *h_idata, const int w, const int h,
 #include "canny-device.cu"
 #include "canny-tensor.cu"
 #include "canny-device-sm.cu"
+#include "canny-device-speed-opt.cu"
 #include "threading.hpp"
 //==============================
 
@@ -318,10 +319,11 @@ int main( int argc, char** argv)
     float sigma=1.0f;
     char *dir=NULL;
     bool sharedMem = false;
+    bool fast = false;
 
     // parse command line arguments
     int opt;
-    while( (opt = getopt(argc,argv,"d:i:o:r:n:x:s:t:mh")) !=-1)
+    while( (opt = getopt(argc,argv,"d:i:o:r:n:x:s:t:fmh")) !=-1)
     {
         switch(opt)
         {
@@ -392,6 +394,9 @@ int main( int argc, char** argv)
             case 'm': // shared memory
                 sharedMem = true;
                 break;
+            case 'f': // shared memory
+                fast = true;
+                break;
             case 'h': // help
                 usage(argv[0]);
                 exit(0);
@@ -425,11 +430,13 @@ int main( int argc, char** argv)
     cudaSafeCall( cudaSetDevice( deviceId ) );
 
     // create events to measure host canny detector time and device canny detector time
-    cudaEvent_t startH, stopH, startD, stopD;
+    cudaEvent_t startH, stopH, startD, stopD, startF, stopF;
     cudaEventCreate(&startH);
     cudaEventCreate(&stopH);
     cudaEventCreate(&startD);
     cudaEventCreate(&stopD);
+    cudaEventCreate(&startF);
+    cudaEventCreate(&stopF);
 
     int* h_stack_idata=NULL;
 
@@ -471,6 +478,7 @@ int main( int argc, char** argv)
 
     // allocate mem for the result on host side
     int* h_odata;
+    int* h_f_odata;
     int* reference;
 
     // detect edges at GPU
@@ -515,6 +523,26 @@ int main( int argc, char** argv)
         cudaEventRecord( stopD, 0 );
         cudaEventSynchronize( stopD );
 
+    } else if (fast) {
+        h_odata = (int*) calloc( h*w, sizeof(unsigned int));
+        reference = (int*) calloc( h*w, sizeof(unsigned int));
+        h_f_odata = (int*) calloc( h*w, sizeof(unsigned int));
+
+        // detect edges at host with shared memory
+        cudaEventRecord( startH, 0 );
+        cannyHost(h_idata, w, h, tmin, tmax, sigma, reference);
+        cudaEventRecord( stopH, 0 );
+        cudaEventSynchronize( stopH );
+
+        cudaEventRecord( startD, 0 );
+        cannyDevice(h_idata, w, h, tmin, tmax, sigma, h_odata);
+        cudaEventRecord( stopD, 0 );
+        cudaEventSynchronize( stopD );
+
+        cudaEventRecord( startF, 0 );
+        cannyDevice_SP(h_idata, w, h, tmin, tmax, sigma, h_f_odata);
+        cudaEventRecord( stopF, 0 );
+        cudaEventSynchronize( stopF );
     } else {
         h_odata = (int*) calloc( h*w, sizeof(unsigned int));
         reference = (int*) calloc( h*w, sizeof(unsigned int));
@@ -539,6 +567,12 @@ int main( int argc, char** argv)
     printf( "Host processing time: %f (ms)\n", timeH);
     cudaEventElapsedTime( &timeD, startD, stopD );
     printf( "Device processing time: %f (ms)\n", timeD);
+
+    if(fast){
+        float timeF;
+        cudaEventElapsedTime( &timeF, startF, stopF );
+        printf( "Device (Speed Optimized) processing time: %f (ms)\n", timeF);
+    }
 
     // save output images
     if(dir != NULL){
@@ -587,6 +621,12 @@ int main( int argc, char** argv)
             exit(1);
         }
 
+        if(fast){
+            if (savePGM("sp_out.pgm",(unsigned int *) h_f_odata, w, h) != 1) {
+                exit(1);
+            }
+        }
+
         int hist = 0;
         for (int i = 0; i < w * h; ++i){
             int delta = abs(reference[i] - h_odata[i]);
@@ -594,11 +634,28 @@ int main( int argc, char** argv)
                 hist++;
         }
         printf("\nNumber of different pixels: %d/%d (%.2f%%)\n", hist, w*h, hist/(float)(w*h) * 100.0f);
+        
+        if(fast){
+            int f_hist = 0;
+            for (int i = 0; i < w * h; ++i){
+                int delta = abs(reference[i] - h_f_odata[i]);
+                if (delta != 0)
+                    f_hist++;
+            }
+
+            printf("\nNumber of different pixels (Speed Optimized): %d/%d (%.2f%%)\n", f_hist, w*h, f_hist/(float)(w*h) * 100.0f);
+        }
     }
 
     // cleanup memory
     if (h_idata != nullptr)
         free( h_idata);
+
+    if(h_stack_idata != nullptr && dir != NULL)
+        free(h_stack_idata);
+
+    if(h_f_odata != nullptr && fast)
+        free(h_f_odata);
 
     free( h_odata);
     free( reference);

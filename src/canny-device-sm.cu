@@ -108,7 +108,7 @@ void convolution_device_SM(const pixel_t *in, pixel_t *out, const float *kernel,
     int shared_h = blockSize.y + 2 * khalf;
     int shared_bytes = shared_w * shared_h * sizeof(pixel_t);
 
-    convolution_kernel<<<gridSize, blockSize, shared_bytes>>>(in, out, kernel, nx, ny, kn, khalf);
+    convolution_kernel_SM<<<gridSize, blockSize, shared_bytes>>>(in, out, kernel, nx, ny, kn, khalf);
 }
 
 __global__ void non_maximum_supression_kernel_SM(const pixel_t *after_Gx, const pixel_t * after_Gy, const pixel_t *G, pixel_t *nms, const int nx, const int ny){
@@ -314,9 +314,9 @@ void gaussian_filter_device_SM(const pixel_t *in, pixel_t *out, const int nx, co
     dim3 blockDim(16, 16);
     dim3 gridDim((n + blockDim.x - 1) / blockDim.x, (n + blockDim.y - 1) / blockDim.y);
     
-    generate_gaussian_kernel<<<gridDim, blockDim>>>(d_kernel, n, sigma);
+    generate_gaussian_kernel_SM<<<gridDim, blockDim>>>(d_kernel, n, sigma);
     
-    convolution_device(in, out, d_kernel, nx, ny, n);
+    convolution_device_SM(in, out, d_kernel, nx, ny, n);
 
     // Image processing sizes (1 thread per pixel)
     dim3 blockSize(16, 16); 
@@ -324,12 +324,12 @@ void gaussian_filter_device_SM(const pixel_t *in, pixel_t *out, const int nx, co
     
     // Get min and max 
     int sharedMemSize = 2 * blockSize.x * blockSize.y * sizeof(int);
-    min_max_kernel<<<gridSize, blockSize, sharedMemSize>>>(out, nx, ny, d_min, d_max);
+    min_max_kernel_SM<<<gridSize, blockSize, sharedMemSize>>>(out, nx, ny, d_min, d_max);
     
     cudaMemcpy(&h_min, d_min, sizeof(pixel_t), cudaMemcpyDeviceToHost);
     cudaMemcpy(&h_max, d_max, sizeof(pixel_t), cudaMemcpyDeviceToHost);
     
-    normalize_kernel<<<gridSize, blockSize>>>(out, nx, ny, n, h_min, h_max);
+    normalize_kernel_SM<<<gridSize, blockSize>>>(out, nx, ny, n, h_min, h_max);
     
     cudaFree(d_kernel);
     cudaFree(d_min);
@@ -388,27 +388,27 @@ void cannyDeviceSM( const int *h_idata, const int w, const int h, const int tmin
     cudaMalloc((void**)&d_Gy, sizeof(Gy));
     cudaMemcpy(d_Gy, Gy, sizeof(Gy), cudaMemcpyHostToDevice);
 
-    gaussian_filter_device(d_idata, d_odata, nx, ny, sigma);
+    gaussian_filter_device_SM(d_idata, d_odata, nx, ny, sigma);
 
     // Gradient along x
-    convolution_device(d_odata, after_Gx, d_Gx, nx, ny, 3);
+    convolution_device_SM(d_odata, after_Gx, d_Gx, nx, ny, 3);
 
     // Gradient along y
-    convolution_device(d_odata, after_Gy, d_Gy, nx, ny, 3);
+    convolution_device_SM(d_odata, after_Gy, d_Gy, nx, ny, 3);
 
     dim3 blockDim(16, 16); 
     dim3 gridDim(ceil((nx-2) / 16.0), ceil((ny-2) / 16.0)); // exclude the 2 border pixels on gradient merge (x0 and nx-1) (y0 and ny-1)
 
-    gradient_merge_kernel<<<gridDim, blockDim>>>(after_Gx, after_Gy, G, nx, ny);
+    gradient_merge_kernel_SM<<<gridDim, blockDim>>>(after_Gx, after_Gy, G, nx, ny);
 
     // 1 thread per pixel
     dim3 blockSize(16, 16); 
     dim3 gridSize(ceil(nx / 16.0), ceil(ny / 16.0));
 
-    non_maximum_supression_kernel<<<gridSize, blockSize>>>(after_Gx, after_Gy, G, nms, nx, ny);
+    non_maximum_supression_kernel_SM<<<gridSize, blockSize>>>(after_Gx, after_Gy, G, nms, nx, ny);
 
     cudaMemset(d_odata, 0, sizeof(pixel_t) * nx * ny);
-    first_edges_kernel<<<gridSize, blockSize>>>(nms, d_odata, nx, ny, tmax);
+    first_edges_kernel_SM<<<gridSize, blockSize>>>(nms, d_odata, nx, ny, tmax);
 
     int h_changed;
     int *d_changed;
@@ -421,7 +421,7 @@ void cannyDeviceSM( const int *h_idata, const int w, const int h, const int tmin
 	h_changed = 0;
 	cudaMemcpy(d_changed, &h_changed, sizeof(int), cudaMemcpyHostToDevice);
 
-	hysteresis_edges_kernel<<<gridSize, blockSize, sharedMemSize>>>(nms, d_odata, nx, ny, tmin, d_changed);
+	hysteresis_edges_kernel_SM<<<gridSize, blockSize, sharedMemSize>>>(nms, d_odata, nx, ny, tmin, d_changed);
 
 	cudaMemcpy(&h_changed, d_changed, sizeof(int), cudaMemcpyDeviceToHost);
     } while (h_changed != 0);
