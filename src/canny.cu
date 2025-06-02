@@ -504,7 +504,7 @@ int main( int argc, char** argv)
         cudaEventSynchronize( stopH );
 
         cudaEventRecord( startD, 0 );
-        cannyDeviceTensor(h_stack_idata, w, h, tmin, tmax, sigma, h_odata);
+        CANNY::TENSOR::cannyDevice(h_stack_idata, w, h, tmin, tmax, sigma, h_odata);
         cudaEventRecord( stopD, 0 );
         cudaEventSynchronize( stopD );
 
@@ -519,7 +519,7 @@ int main( int argc, char** argv)
         cudaEventSynchronize( stopH );
 
         cudaEventRecord( startD, 0 );
-        cannyDeviceSM(h_idata, w, h, tmin, tmax, sigma, h_odata);
+        CANNY::SM::cannyDevice(h_idata, w, h, tmin, tmax, sigma, h_odata);
         cudaEventRecord( stopD, 0 );
         cudaEventSynchronize( stopD );
 
@@ -535,12 +535,12 @@ int main( int argc, char** argv)
         cudaEventSynchronize( stopH );
 
         cudaEventRecord( startD, 0 );
-        cannyDevice(h_idata, w, h, tmin, tmax, sigma, h_odata);
+        CANNY::cannyDevice(h_idata, w, h, tmin, tmax, sigma, h_odata);
         cudaEventRecord( stopD, 0 );
         cudaEventSynchronize( stopD );
 
         cudaEventRecord( startF, 0 );
-        cannyDevice_SP(h_idata, w, h, tmin, tmax, sigma, h_f_odata);
+        CANNY::SPEED::cannyDevice(h_idata, w, h, tmin, tmax, sigma, h_f_odata);
         cudaEventRecord( stopF, 0 );
         cudaEventSynchronize( stopF );
     } else {
@@ -554,7 +554,7 @@ int main( int argc, char** argv)
         cudaEventSynchronize( stopH );
 
         cudaEventRecord( startD, 0 );
-        cannyDevice(h_idata, w, h, tmin, tmax, sigma, h_odata);
+        CANNY::cannyDevice(h_idata, w, h, tmin, tmax, sigma, h_odata);
         cudaEventRecord( stopD, 0 );
         cudaEventSynchronize( stopD );
     }
